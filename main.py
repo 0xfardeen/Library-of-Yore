@@ -14,6 +14,8 @@ os.environ.setdefault("LIBRARYOFYORE_BASE", BASE_DIR)
 # Crash log path — written next to the exe so it's easy to find
 CRASH_LOG = os.path.join(BASE_DIR, "crash_log.txt")
 
+from loy_server import run_server
+run_server(daemon=True)
 
 def main():
     from PyQt6.QtWidgets import QApplication
