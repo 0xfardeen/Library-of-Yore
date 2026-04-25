@@ -2,75 +2,63 @@ name: Build & Release
 
 on:
   release:
-    types: [published]  # Trigger when you publish a release manually or via API
+    types: [published]
 
 permissions:
-  contents: write  # Required to upload release assets
+  contents: write
 
 jobs:
   build-and-release:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest  # ✅ Bug 1: Windows runner for .exe
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ─────────────────────────────────────────────────────
-      # 1️⃣ Build your main app (Library of Yore)
-      # ─────────────────────────────────────────────────────
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Install app dependencies
+      - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          # Add any build tools: pyinstaller, poetry, etc.
-
-      - name: Build Library of Yore app
-        run: |
-          # Example using PyInstaller - adjust for your build system
           pip install pyinstaller
-          pyinstaller --onefile main.py
-          # Or: npm run build, poetry build, etc.
+          pip install playwright
+          playwright install chromium  # ✅ Bug 3: Install browser binaries
+        shell: pwsh
 
-      - name: Package app build
+      - name: Build Library of Yore
         run: |
-          mkdir -p release-artifacts
-          # Adjust paths based on your actual build output
-          cp dist/main* release-artifacts/ || cp build/exe*/main* release-artifacts/ || true
-          # Include config files if needed
-          cp -r config/ release-artifacts/ 2>/dev/null || true
-          cd release-artifacts
-          zip -r ../library-of-yore-v${{ github.ref_name }}.zip .
-          cd ..
+          pyinstaller --onefile --name LibraryOfYore main.py
+        shell: pwsh
 
-      # ─────────────────────────────────────────────────────
-      # 2️⃣ Package the Chrome extension
-      # ─────────────────────────────────────────────────────
+      - name: Prepare release artifacts
+        run: |
+          New-Item -ItemType Directory -Path "release-artifacts" -Force
+          Copy-Item "dist\LibraryOfYore.exe" "release-artifacts\"  # ✅ Bug 4: Correct output path
+          Copy-Item "loy_server.py" "release-artifacts\"          # ✅ Bug 6: Include sync server
+          if (Test-Path "config") { Copy-Item "config" "release-artifacts\config" -Recurse }
+        shell: pwsh
+
+      - name: Zip app build
+        run: Compress-Archive -Path "release-artifacts\*" -DestinationPath "library-of-yore-${{ github.ref_name }}.zip"  # ✅ Bug 5: Fixed double v
+        shell: pwsh
+
       - name: Package Chrome extension
         run: |
-          cd loy-sync-extension
-          # Remove dev files, keep only production assets
-          zip -r ../loy-sync-extension-v${{ github.ref_name }}.zip \
-            manifest.json \
-            background.js \
-            content.js \
-            popup.html \
-            popup.js \
-            popup.css \
-            icons/ \
-            -x "*.map" -x "*.md" -x "node_modules/*"
-          cd ..
+          if (Test-Path "loy-sync-extension") {
+            Set-Location "loy-sync-extension"
+            Compress-Archive -Path "manifest.json","background.js","content.js","popup.html","popup.js","popup.css","icons" -DestinationPath "..\loy-sync-extension-${{ github.ref_name }}.zip" -Force
+            Set-Location ..
+          } else {
+            Write-Warning "loy-sync-extension folder not found, skipping."
+            New-Item -ItemType File -Path "loy-sync-extension-${{ github.ref_name }}.zip" -Force
+          }
+        shell: pwsh
 
-      # ─────────────────────────────────────────────────────
-      # 3️⃣ Upload both artifacts to the GitHub Release
-      # ─────────────────────────────────────────────────────
       - name: Upload release assets
-        uses: softprops/action-gh-release@v1  # Popular, well-maintained action [[1]]
+        uses: softprops/action-gh-release@v2
         with:
           files: |
-            library-of-yore-v${{ github.ref_name }}.zip
-            loy-sync-extension-v${{ github.ref_name }}.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            library-of-yore-${{ github.ref_name }}.zip
+            loy-sync-extension-${{ github.ref_name }}.zip
