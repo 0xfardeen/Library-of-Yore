@@ -9,56 +9,103 @@ permissions:
 
 jobs:
   build-and-release:
-    runs-on: windows-latest  # ✅ Bug 1: Windows runner for .exe
+    runs-on: windows-latest
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # ─────────────────────────────────────────────────────
+      # 1️⃣  Python + dependencies
+      # ─────────────────────────────────────────────────────
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          pip install pyinstaller
-          pip install playwright
-          playwright install chromium  # ✅ Bug 3: Install browser binaries
-        shell: pwsh
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
 
+      - name: Install Playwright browsers
+        run: playwright install --with-deps chromium
+
+      # ─────────────────────────────────────────────────────
+      # 2️⃣  Build with PyInstaller
+      # ─────────────────────────────────────────────────────
       - name: Build Library of Yore
         run: |
-          pyinstaller --onefile --name LibraryOfYore main.py
-        shell: pwsh
+          pyinstaller `
+            --onedir `
+            --name "LibraryOfYore" `
+            --collect-all PyQt6 `
+            --collect-all playwright `
+            --hidden-import pymongo `
+            --hidden-import PIL `
+            --hidden-import bs4 `
+            --hidden-import openpyxl `
+            --add-data "assets;assets" `
+            main.py
 
-      - name: Prepare release artifacts
+      # ─────────────────────────────────────────────────────
+      # 3️⃣  Package the app
+      # ─────────────────────────────────────────────────────
+      - name: Package app build
+        shell: pwsh
         run: |
-          New-Item -ItemType Directory -Path "release-artifacts" -Force
-          Copy-Item "dist\LibraryOfYore.exe" "release-artifacts\"  # ✅ Bug 4: Correct output path
-          Copy-Item "loy_server.py" "release-artifacts\"          # ✅ Bug 6: Include sync server
-          if (Test-Path "config") { Copy-Item "config" "release-artifacts\config" -Recurse }
-        shell: pwsh
-
-      - name: Zip app build
-        run: Compress-Archive -Path "release-artifacts\*" -DestinationPath "library-of-yore-${{ github.ref_name }}.zip"  # ✅ Bug 5: Fixed double v
-        shell: pwsh
-
-      - name: Package Chrome extension
-        run: |
-          if (Test-Path "loy-sync-extension") {
-            Set-Location "loy-sync-extension"
-            Compress-Archive -Path "manifest.json","background.js","content.js","popup.html","popup.js","popup.css","icons" -DestinationPath "..\loy-sync-extension-${{ github.ref_name }}.zip" -Force
-            Set-Location ..
-          } else {
-            Write-Warning "loy-sync-extension folder not found, skipping."
-            New-Item -ItemType File -Path "loy-sync-extension-${{ github.ref_name }}.zip" -Force
+          if (-not (Test-Path "dist\LibraryOfYore")) {
+            Write-Error "ERROR: PyInstaller build output not found!"
+            exit 1
           }
-        shell: pwsh
 
+          New-Item -ItemType Directory -Force -Path "release-artifacts\LibraryOfYore"
+          Copy-Item -Recurse "dist\LibraryOfYore\*" "release-artifacts\LibraryOfYore\"
+
+          Copy-Item "README.md" "release-artifacts\" -ErrorAction SilentlyContinue
+
+          Set-Content -Path "release-artifacts\HOW_TO_RUN.txt" -Value @"
+          Library of Yore - Quick Start
+          ==============================
+          Requirements:
+            - MongoDB must be running on localhost:27017
+              Install: https://www.mongodb.com/try/download/community
+
+          How to run:
+            Double-click LibraryOfYore\LibraryOfYore.exe
+          "@
+
+          Compress-Archive -Path "release-artifacts\*" -DestinationPath "library-of-yore-${{ github.ref_name }}.zip"
+
+          Write-Host "=== Release zip contents ==="
+          (Get-ChildItem -Recurse "release-artifacts").Count
+
+      # ─────────────────────────────────────────────────────
+      # 4️⃣  Package the Chrome extension
+      # ─────────────────────────────────────────────────────
+      - name: Package Chrome extension
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "loy-sync-extension")) {
+            Write-Error "ERROR: loy-sync-extension directory not found!"
+            exit 1
+          }
+          Compress-Archive -Path `
+            "loy-sync-extension\manifest.json", `
+            "loy-sync-extension\background.js", `
+            "loy-sync-extension\content.js", `
+            "loy-sync-extension\popup.html", `
+            "loy-sync-extension\popup.js", `
+            "loy-sync-extension\popup.css", `
+            "loy-sync-extension\icons" `
+            -DestinationPath "loy-sync-extension-${{ github.ref_name }}.zip"
+
+      # ─────────────────────────────────────────────────────
+      # 5️⃣  Upload both to the GitHub Release
+      # ─────────────────────────────────────────────────────
       - name: Upload release assets
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v1
         with:
           files: |
             library-of-yore-${{ github.ref_name }}.zip
             loy-sync-extension-${{ github.ref_name }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
